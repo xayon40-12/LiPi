@@ -24,6 +24,8 @@ source-repository head
   location: https://github.com/xayon40-12/dependent-types
 
 library
+  exposed-modules:
+      Data.IR
   other-modules:
       Paths_dependent_types
   hs-source-dirs:

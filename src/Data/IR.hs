@@ -1,6 +1,7 @@
 module Data.IR where
 
 -- | Types
+--   SigmaT and PiT are types if the result of their lambda is a type
 data Type e
   = -- | Type of types
     TypeT
@@ -9,26 +10,26 @@ data Type e
   | -- | Unit type
     UnitT
   | -- | Dependent pair, represented as a type and a lambda that take the value of the type and return another type
-    SigmaT (Type e) (Lambda Type e)
+    SigmaT (Type e) (Lambda e)
   | -- | Dependent function, same representation as SigmaT
-    PiT (Type e) (Lambda Type e)
+    PiT (Type e) (Lambda e)
   | -- | Sum type
     ChoiceT (Type e) (Type e)
 
 -- | Unnamed function (aka lambda)
-data Lambda f e
+data Lambda e
   = -- | Lambda expression
     Lambda
       e
       -- ^ parameter name
-      (f e)
+      (Exp e)
       -- ^ expression of the lambda
 
 -- | Apply an expression to a lambda
-apply :: (Eq e, HasReplace f, IsSame f) => Lambda f e -> f e -> f e
+apply :: (Eq e) => Lambda e -> Exp e -> Exp e
 apply (Lambda p e) v = replace cond e
   where
-    cond e | isSame e p = v
+    cond (NameE e) | e == p = v
     cond e = e
 
 -- | Expression
@@ -41,43 +42,36 @@ data Exp e
     UnitE
   | -- | Constructor of a pair
     PairE (Exp e) (Exp e)
-  | -- | Destructor for Pair
-    MatchPairE (Exp e) (Lambda (Lambda Exp) e)
+  | -- | Destructor for Pair, it should have a lambda of lambda (to bind both values of the pair)
+    MatchPairE (Exp e) (Lambda e)
   | -- | Constructor of lambda expression
-    LambdaE (Lambda Exp e)
+    LambdaE (Lambda e)
+  | -- | Destructor for lambda
+    ApplyE (Exp e) (Lambda e)
   | -- | Left constructor of a Sum Type
     InlE (Exp e)
   | -- | Rigt constructor of a Sum Type
     InrE (Exp e)
   | -- | Destructor for Sum types
-    MatchChoiceE (Exp e) (Lambda Exp e) (Lambda Exp e)
+    MatchChoiceE (Exp e) (Lambda e) (Lambda e)
 
 -- | Values status
-data Value e
-  = -- | A value in its normal form (irreductidle with no external binding)
-    Normal (Exp e)
-  | -- | An irreductible value that has extrnal bindings
-    Neutral (Exp e)
-  | -- | A value which as not yet been evaluated
-    Unevaluated (Exp e)
+data Status
+  = -- | Irreductible state with no external bindings
+    Normal
+  | -- | Irreductible state with external bindings
+    Neutral
+  | -- | Unknown status
+    Unevaluated
 
--- | Type class to verify if a token as the same value as a variable name
-class IsSame f where
-  isSame :: (Eq e) => f e -> e -> Bool
-
-instance IsSame Exp where
-  isSame (NameE e1) e2 = e1 == e2
-  isSame _ _ = False
-
-instance IsSame Type where isSame _ _ = False
-
-instance IsSame (Lambda f) where isSame _ _ = False
+-- | A value is an expression with a type and a status
+data Value e = Value Status (Type e) (Exp e)
 
 -- | Type class to replace names bounded by lambda by the value provided. Needed for lambda application.
 class HasReplace r where
-  replace :: HasReplace f => (f e -> f e) -> r e -> r e
+  replace :: (Exp e -> Exp e) -> r e -> r e
 
-instance (HasReplace f) => HasReplace (Lambda f) where
+instance HasReplace Lambda where
   replace re (Lambda e exp) = Lambda e (replace re exp)
 
 instance HasReplace Type where
