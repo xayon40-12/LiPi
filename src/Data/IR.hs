@@ -132,8 +132,10 @@ typeCheck e t =
     typeCheck' (PairE _ _) _ = Just ""
     typeCheck' (LambdaE l) _ = undefined
     typeCheck' (ApplyE v l) _ = undefined
-    typeCheck' (InlE v) _ = undefined
-    typeCheck' (InrE v) _ = undefined
+    typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) ""
+    typeCheck' (InlE (Value _ t _)) _ = Just ""
+    typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) ""
+    typeCheck' (InrE (Value _ t _)) _ = Just ""
     typeCheck' (MatchE v l) _ = undefined
 
 -- | Values status
