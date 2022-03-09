@@ -144,14 +144,31 @@ typeCheck e t =
 data Status e
   = -- | Irreductible state with no external bindings
     Normal
+  | -- | Reductible state with no external bindings
+    Reductible
   | -- | Irreductible state with external bindings
     Neutral (Set (Name e))
+  | -- | Reductible state with external bindings
+    NeutralR (Set (Name e))
   deriving (Eq, Ord, Show)
 
-status :: (Ord e, HasBinders b) => b e -> Status e
-status b = if null bs then Normal else Neutral bs
-  where
-    bs = binders b
+instance (Ord e) => Semigroup (Status e) where
+  NeutralR s1 <> NeutralR s2 = NeutralR (s1 <> s2)
+  NeutralR s1 <> Neutral s2 = NeutralR (s1 <> s2)
+  Neutral s1 <> NeutralR s2 = NeutralR (s1 <> s2)
+  NeutralR s1 <> _ = NeutralR s1
+  _ <> NeutralR s2 = NeutralR s2
+  Neutral s1 <> Neutral s2 = Neutral (s1 <> s2)
+  Neutral s <> Reductible = NeutralR s
+  Reductible <> Neutral s = NeutralR s
+  Neutral s <> Normal = Neutral s
+  Normal <> Neutral s = Neutral s
+  Reductible <> _ = Reductible
+  _ <> Reductible = Reductible
+  Normal <> Normal = Normal
+
+instance (Ord e) => Monoid (Status e) where
+  mempty = Normal
 
 -- | A value is an expression with a type and a status
 data Value e = Value (Status e) (Type e) (Exp e) deriving (Eq, Ord, Show)
@@ -194,31 +211,35 @@ instance HasReplace Exp where
   replace re (MatchE v1 v2) = MatchE (replace re v1) (replace re v2)
 
 -- | Type class to search the number of binding names present
-class HasBinders r where
-  binders :: (Ord e) => r e -> Set (Name e)
+class HasStatus r where
+  status :: (Ord e) => r e -> Status e
 
-instance HasBinders Value where
-  binders (Value (Neutral ns) _ _) = ns
-  binders (Value Normal _ _) = empty
+instance HasStatus Value where
+  status (Value s _ _) = s
 
-instance HasBinders Lambda where
-  binders (Lambda n v) = delete n $ binders v
+instance HasStatus Lambda where
+  status (Lambda n v) = case status v of
+    Neutral ns -> let nns = delete n ns in if null nns then Normal else Neutral nns
+    NeutralR ns -> let nns = delete n ns in if null nns then Reductible else NeutralR nns
+    unbounded -> unbounded
 
-instance HasBinders Type where
-  binders TypeT = empty
-  binders VoidT = empty
-  binders UnitT = empty
-  binders (SigmaT t l) = binders t <> binders l
-  binders (PiT t l _) = binders t <> binders l
-  binders (ChoiceT t1 t2) = binders t1 <> binders t2
+instance HasStatus Type where
+  status TypeT = mempty
+  status VoidT = mempty
+  status UnitT = mempty
+  status (SigmaT t l) = status t <> status l
+  status (PiT t l _) = status t <> status l
+  status (ChoiceT t1 t2) = status t1 <> status t2
 
-instance HasBinders Exp where
-  binders (TypeE t) = binders t
-  binders (NameE n) = singleton n
-  binders UnitE = empty
-  binders (PairE v1 v2) = binders v1 <> binders v2
-  binders (LambdaE l) = binders l
-  binders (ApplyE l n) = binders l <> binders n
-  binders (InlE v) = binders v
-  binders (InrE v) = binders v
-  binders (MatchE v1 v2) = binders v1 <> binders v2
+instance HasStatus Exp where
+  status (TypeE t) = status t
+  status (NameE n) = Neutral $ singleton n
+  status UnitE = mempty
+  status (PairE v1 v2) = status v1 <> status v2
+  status (LambdaE l) = status l
+  status (ApplyE l n) = Reductible <> status l <> status n
+  status (InlE v) = status v
+  status (InrE v) = status v
+  status (MatchE v1 v2) = case status v1 <> status v2 of
+    Normal -> Reductible -- In this case the match can be computed
+    s -> s
