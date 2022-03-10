@@ -5,6 +5,8 @@
  ** Type checking
     - use an enumeration for the error instead of String. It would allow for more specific error messages produced by the interpreter itself
 
-
-
+ ** Recursion
     - for recursion create a withRecVariable that provide a recE
+
+ ** IO
+    for IO create an `IO` type with different helper functions that only use `IO` linearly. The type of main is thus `main :: IO -o IO` where `-o` is the linear function operator

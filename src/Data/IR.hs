@@ -1,4 +1,4 @@
-module Data.IR (Type (TypeT, VoidT, UnitT), sigmaT, piT, choiceT, Lambda (), withLambda, Name (..), Exp (TypeE, UnitE, PairE, LambdaE, InlE, InrE), applyE, matchE, Value (), newValue) where
+module Data.IR (Type (TypeT, VoidT, UnitT, TaggedT), withInductiveType, sigmaT, piT, choiceT, Lambda (), withLambda, withLambdaRec, Name (..), Exp (TypeE, UnitE, PairE, LambdaE, InlE, InrE), applyE, matchE, Value (), newValue) where
 
 import Data.Set (Set, delete, empty, singleton)
 
@@ -17,7 +17,20 @@ data Type e
     PiT (Type e) (Lambda e) Bool
   | -- | Sum type
     ChoiceT (Type e) (Type e)
+  | -- | Tagged type
+    TaggedT e (Type e)
+  | -- | Used for inductive types in conjonction with  TaggedT
+    InductiveT e
   deriving (Eq, Ord, Show)
+
+-- | smart constructor for inductive types.
+withInductiveType ::
+  -- | Name of the type
+  e ->
+  -- | callback that provide the inductive type as an expression and should return the resulting type
+  (Exp e -> Type e) ->
+  Type e
+withInductiveType n f = TaggedT n (f (NameE (Name n (InductiveT n))))
 
 isSigmaT, isChoiceT :: Type e -> Bool
 isSigmaT (SigmaT _ _) = True
@@ -51,6 +64,8 @@ isType UnitT = True
 isType (SigmaT t1 (Lambda (Name _ _) (Value _ t2 _))) = isType t1 && isType t2
 isType (PiT t1 (Lambda (Name _ _) (Value _ t2 _)) _) = isType t1 && isType t2
 isType (ChoiceT t1 t2) = isType t1 && isType t2
+isType (TaggedT _ t) = isType t
+isType (InductiveT _) = True
 
 -- | Unnamed function (aka lambda)
 data Lambda e
@@ -65,6 +80,18 @@ data Lambda e
 -- | Lambda smart constructor that take a name and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
 withLambda :: (Eq e, Ord e) => Name e -> (Exp e -> Value e) -> Lambda e
 withLambda n f = Lambda n (f (NameE n))
+
+-- | Lambda smart constructor with recursion.
+withLambdaRec ::
+  (Eq e, Ord e) =>
+  -- | Name of the function to recurse on
+  Name e ->
+  -- | Name of the lambda parameter
+  Name e ->
+  -- | callback that provide a lambda to create a 'RecE' with the name already provided and the parameter as an expression, that should return the return value of the lambda
+  ((Value e -> Value e -> Exp e) -> Exp e -> Value e) ->
+  Lambda e
+withLambdaRec recName n f = Lambda n (f (RecE recName) (NameE n))
 
 -- | lambda application
 apply :: (Eq e, Ord e) => Lambda e -> Value e -> Value e
@@ -93,8 +120,8 @@ data Exp e
     InrE (Value e)
   | -- | Destructor for Pair and Sum types, the first value should be a pair or a choice and the second a lambda of lambda to extract both values of the pair and respectively a pair of lambda to extract both possibility of a choice
     MatchE (Value e) (Value e)
-  --  | -- |
-  -- RecE (Name e) (Value e) (Value e)
+  | -- |
+    RecE (Name e) (Value e) (Value e)
   deriving (Eq, Ord, Show)
 
 applyE :: (Show e, Eq e) => Lambda e -> Value e -> Either Error (Exp e)
@@ -144,6 +171,7 @@ typeCheck e t =
     typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) ""
     typeCheck' (InrE (Value _ t _)) _ = Just ""
     typeCheck' (MatchE v l) _ = undefined
+    typeCheck' (RecE n v l) _ = undefined
 
 -- | Values status
 data Status e
@@ -202,6 +230,8 @@ instance HasReplace Type where
   replace re (SigmaT t l) = SigmaT (replace re t) (replace re l)
   replace re (PiT t l lin) = PiT (replace re t) (replace re l) lin
   replace re (ChoiceT t1 t2) = ChoiceT (replace re t1) (replace re t2)
+  replace re (TaggedT n t) = TaggedT n (replace re t)
+  replace _ i@(InductiveT _) = i
 
 instance HasReplace Exp where
   replace re (TypeE t) = TypeE (replace re t)
@@ -213,6 +243,7 @@ instance HasReplace Exp where
   replace re (InlE v) = InlE (replace re v)
   replace re (InrE v) = InrE (replace re v)
   replace re (MatchE v1 v2) = MatchE (replace re v1) (replace re v2)
+  replace re (RecE n v1 v2) = RecE n (replace re v1) (replace re v2)
 
 -- | Type class to search the number of binding names present
 class HasStatus r where
@@ -234,6 +265,8 @@ instance HasStatus Type where
   status (SigmaT t l) = status t <> status l
   status (PiT t l _) = status t <> status l
   status (ChoiceT t1 t2) = status t1 <> status t2
+  status (TaggedT _ t) = status t
+  status (InductiveT _) = mempty -- WARING: is it neutral or Reductible due to induction? Maybe always Reductible as it can expand indefinitly
 
 instance HasStatus Exp where
   status (TypeE t) = status t
@@ -247,3 +280,4 @@ instance HasStatus Exp where
   status (MatchE v1 v2) = case status v1 <> status v2 of
     Normal -> Reductible -- In this case the match can be computed
     s -> s
+  status (RecE _ v1 v2) = status v1 <> status v2 -- the name of the function use in the recursion is not a lambda binder, thus it does not count
