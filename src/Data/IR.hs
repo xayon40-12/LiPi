@@ -1,4 +1,4 @@
-module Data.IR (Type (TypeT, VoidT, UnitT), sigmaT, piT, choiceT, Lambda (Lambda), Exp (TypeE, NameE, UnitE, PairE, LambdaE, InlE, InrE), applyE, matchE, Value (), newValue) where
+module Data.IR (Type (TypeT, VoidT, UnitT), sigmaT, piT, choiceT, Lambda (), withLambda, Name (..), Exp (TypeE, UnitE, PairE, LambdaE, InlE, InrE), applyE, matchE, Value (), newValue) where
 
 import Data.Set (Set, delete, empty, singleton)
 
@@ -62,6 +62,11 @@ data Lambda e
       -- ^ expression of the lambda
   deriving (Eq, Ord, Show)
 
+-- | Lambda smart constructor that take a name and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
+withLambda :: (Eq e, Ord e) => Name e -> (Exp e -> Value e) -> Lambda e
+withLambda n f = Lambda n (f (NameE n))
+
+-- | lambda application
 apply :: (Eq e, Ord e) => Lambda e -> Value e -> Value e
 apply (Lambda (Name p _) r) (Value _ _ v) = replace (p, v) r
 
@@ -132,7 +137,7 @@ typeCheck e t =
     typeCheck' UnitE _ = Just ""
     typeCheck' (PairE v1 v2) (SigmaT t l) = unless (valueType v1 == t && case apply l v1 of (Value _ TypeT (TypeE t2)) -> valueType v2 == t2; _ -> False) ""
     typeCheck' (PairE _ _) _ = Just ""
-    typeCheck' (LambdaE l) _ = undefined
+    typeCheck' (LambdaE l) _ = undefined -- TODO: forbid nested name shadowing
     typeCheck' (ApplyE l v) _ = undefined
     typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) ""
     typeCheck' (InlE (Value _ t _)) _ = Just ""
@@ -145,27 +150,25 @@ data Status e
   = -- | Irreductible state with no external bindings
     Normal
   | -- | Reductible state with no external bindings
-    Reductible
-  | -- | Irreductible state with external bindings
     Neutral (Set (Name e))
   | -- | Reductible state with external bindings
+    Reductible
+  | -- | Irreductible state with external bindings
     NeutralR (Set (Name e))
   deriving (Eq, Ord, Show)
 
 instance (Ord e) => Semigroup (Status e) where
   NeutralR s1 <> NeutralR s2 = NeutralR (s1 <> s2)
   NeutralR s1 <> Neutral s2 = NeutralR (s1 <> s2)
-  Neutral s1 <> NeutralR s2 = NeutralR (s1 <> s2)
-  NeutralR s1 <> _ = NeutralR s1
-  _ <> NeutralR s2 = NeutralR s2
-  Neutral s1 <> Neutral s2 = Neutral (s1 <> s2)
-  Neutral s <> Reductible = NeutralR s
+  NeutralR s1 <> Reductible = NeutralR s1
+  NeutralR s1 <> Normal = NeutralR s1
+  Reductible <> Reductible = Reductible
   Reductible <> Neutral s = NeutralR s
+  Reductible <> Normal = Reductible
+  Neutral s1 <> Neutral s2 = Neutral (s1 <> s2)
   Neutral s <> Normal = Neutral s
-  Normal <> Neutral s = Neutral s
-  Reductible <> _ = Reductible
-  _ <> Reductible = Reductible
   Normal <> Normal = Normal
+  a <> b = b <> a
 
 instance (Ord e) => Monoid (Status e) where
   mempty = Normal
@@ -173,6 +176,7 @@ instance (Ord e) => Monoid (Status e) where
 -- | A value is an expression with a type and a status
 data Value e = Value (Status e) (Type e) (Exp e) deriving (Eq, Ord, Show)
 
+-- | Create a value from a type and an expression if it typechecks
 newValue :: (Eq e, Ord e, Show e) => Type e -> Exp e -> Either Error (Value e)
 newValue t e = case typeCheck e t of
   Nothing -> Right $ Value (status e) t e

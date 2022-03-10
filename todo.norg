@@ -1,6 +1,10 @@
 * TODO
- ** Lambda
-    - do not use names as lambda binders but use a name plus an internal number that inctement automaticaly as lambda are nested
+ ** Name Binders
+    - the `NameE` constuctor from `data Exp e` must not be accessible as out of a lambda context it has no meaning
 
- ** Binders
-    - the `data Name e` must not be exported and only created by `RecE`
+ ** Type checking
+    - use an enumeration for the error instead of String. It would allow for more specific error messages produced by the interpreter itself
+
+
+
+    - for recursion create a withRecVariable that provide a recE
