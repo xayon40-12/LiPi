@@ -26,7 +26,6 @@ source-repository head
 library
   exposed-modules:
       LiPi.IR
-      LiPi.IR.Instances
       LiPi.IR.Internals
       LiPi.IR.SmartConstructors
   other-modules:

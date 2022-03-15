@@ -2,6 +2,20 @@ module LiPi.IR.SmartConstructors where
 
 import LiPi.IR.Internals
 
+data TypeError e
+  = SigmaTLambdaReturnTypeNotType (Type e)
+  | PiTLambdaReturnTypeNotType (Type e)
+  | ChoiceTFirstTypeNotType (Type e)
+  | ChoiceTSecondTypeNotType (Type e)
+  | ChoiceTBothTypesNotTypes (Type e) (Type e)
+
+instance (Show e) => Show (TypeError e) where
+  show (SigmaTLambdaReturnTypeNotType t) = "The return type of the lambda in a SigmaT must be a valid Type, found: (" <> show t <> ")."
+  show (PiTLambdaReturnTypeNotType t) = "The return type of the lambda in a PiT must be a valid Type, found: (" <> show t <> ")."
+  show (ChoiceTFirstTypeNotType t) = "Both types in a ChoiceT must be valid types but the first is not: (" <> show t <> ")."
+  show (ChoiceTSecondTypeNotType t) = "Both types in a ChoiceT must be valid types but the second is not: (" <> show t <> ")."
+  show (ChoiceTBothTypesNotTypes t1 t2) = "Both types in a ChoiceT must be valid types but both are not: first (" <> show t1 <> "), second (" <> show t2 <> ")."
+
 -- | smart constructor for inductive types.
 withInductiveType ::
   -- | Name of the type
@@ -17,24 +31,24 @@ isSigmaT _ = False
 isChoiceT (ChoiceT _ _) = True
 isChoiceT _ = False
 
-sigmaT :: (Show e) => Type e -> Lambda e -> Either Error (Type e)
+sigmaT :: (Show e) => Type e -> Lambda e -> Either (TypeError e) (Type e)
 sigmaT t l@(Lambda (Name e tl) (Value _ tv _)) =
   if isType tv
     then Right $ SigmaT t l
-    else Left $ "The return type of the lambda in a SigmaT must be a valid Type, found: (" <> show tv <> ")."
+    else Left $ SigmaTLambdaReturnTypeNotType tv
 
-piT :: (Show e) => Type e -> Lambda e -> Either Error (Type e)
+piT :: (Show e) => Type e -> Lambda e -> Either (TypeError e) (Type e)
 piT t l@(Lambda (Name e tl) (Value _ tv _)) =
   if isType tv
     then Right $ SigmaT t l
-    else Left $ "The return type of the lambda in a PiT must be a valid Type, found: (" <> show tv <> ")."
+    else Left $ PiTLambdaReturnTypeNotType tv
 
-choiceT :: (Show e) => Type e -> Type e -> Either Error (Type e)
+choiceT :: (Show e) => Type e -> Type e -> Either (TypeError e) (Type e)
 choiceT t1 t2 = case (isType t1, isType t2) of
   (True, True) -> Right $ ChoiceT t1 t2
-  (False, True) -> Left $ "Both types in a ChoiceT must be valid types but the first is not: (" <> show t1 <> ")."
-  (True, False) -> Left $ "Both types in a ChoiceT must be valid types but the second is not: (" <> show t2 <> ")."
-  (False, False) -> Left $ "Both types in a ChoiceT must be valid types but both are not: first (" <> show t1 <> "), second (" <> show t2 <> ")."
+  (False, True) -> Left $ ChoiceTFirstTypeNotType t1
+  (True, False) -> Left $ ChoiceTSecondTypeNotType t2
+  (False, False) -> Left $ ChoiceTBothTypesNotTypes t1 t2
 
 isType :: Type e -> Bool
 isType TypeT = False -- The type of types is not an element of itself
@@ -62,11 +76,17 @@ withLambdaRec ::
   Lambda e
 withLambdaRec recName n f = Lambda n (f (RecE recName) (NameE n))
 
-applyE :: (Show e, Eq e) => Lambda e -> Value e -> Either Error (Exp e)
+data ExpError e
+  = ApplyEValueTypeInputTypeNotSame (Type e) (Type e)
+
+instance (Show e) => Show (ExpError e) where
+  show (ApplyEValueTypeInputTypeNotSame tv tl) = "The input type of the lambda in a ApplyE must be the same as the value, expected (" <> show tv <> "), provided (" <> show tl <> ")."
+
+applyE :: (Show e, Eq e) => Lambda e -> Value e -> Either (ExpError e) (Exp e)
 applyE l@(Lambda (Name _ tl) _) v@(Value _ tv _) =
   if tv == tl
     then Right $ ApplyE l v
-    else Left $ "The input type of the lambda in a ApplyE must be the same as the value, expected (" <> show tv <> "), provided (" <> show tl <> ")."
+    else Left $ ApplyEValueTypeInputTypeNotSame tv tl
 
 matchE :: (Show e, Eq e) => Value e -> Value e -> Either Error (Exp e)
 matchE v@(Value _ _ (PairE p1@(Value _ tp1 _) p2@(Value _ tp2 _))) l@(Value _ _ (LambdaE (Lambda (Name _ tl) (Value _ tll _)))) = case (tp1 == tl, tp2 == tll) of
@@ -85,6 +105,12 @@ unless :: Bool -> Error -> Maybe Error
 unless True _ = Nothing
 unless False err = Just err
 
+data TypeCheckError e
+  = TypeENotTypeT (Type e)
+
+instance (Show e) => Show (TypeCheckError e) where
+  show (TypeENotTypeT t) = "Type check error: found a TypeE expression of type TypeT where a type (" <> show t <> ") was expected."
+
 -- | Verify that the expression as the given type. If not, an information about the difference is returned.
 typeCheck :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe Error
 typeCheck e t =
@@ -94,7 +120,7 @@ typeCheck e t =
   where
     typeCheck' :: (Eq e, Ord e) => Exp e -> Type e -> Maybe Error
     typeCheck' (TypeE _) TypeT = Nothing
-    typeCheck' (TypeE _) _ = Just ""
+    typeCheck' (TypeE _) t = Just "" -- TypeENotTypeT t
     typeCheck' (NameE (Name _ t1)) t2 = unless (t1 == t2) ""
     typeCheck' UnitE UnitT = Nothing
     typeCheck' UnitE _ = Just ""
