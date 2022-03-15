@@ -1,3 +1,12 @@
+@document.meta
+  title: todo
+  description: 
+  authors: touroux
+  categories: 
+  created: 2022-03-15
+  version: 0.0.9
+@end
+
 * TODO
  ** Name Binders
     - the `NameE` constuctor from `data Exp e` must not be accessible as out of a lambda context it has no meaning
@@ -9,4 +18,5 @@
     - for recursion create a withRecVariable that provide a recE
 
  ** IO
-    for IO create an `IO` type with different helper functions that only use `IO` linearly. The type of main is thus `main :: IO -o IO` where `-o` is the linear function operator
+    - for IO create an `IO` type with different helper functions that only use `IO` linearly. The type of main is thus `main :: IO -o IO` where `-o` is the linear function operator
+    - IO is simply `VoidT` tagged IO so for `String` it is `TaggetT "IO" VoidT`

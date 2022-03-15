@@ -1,4 +1,4 @@
-name:                dependent-types
+name:                LiPi
 version:             0.1.0.0
 github:              "xayon40-12/dependent-types"
 license:             BSD3
@@ -35,7 +35,7 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - dependent-types
+    - LiPi
 
 tests:
   dependent-types-test:
@@ -46,4 +46,4 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - dependent-types
+    - LiPi
