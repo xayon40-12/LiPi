@@ -27,7 +27,7 @@ library:
   source-dirs: src
 
 executables:
-  dependent-types-exe:
+  LiPi:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
@@ -38,7 +38,7 @@ executables:
     - LiPi
 
 tests:
-  dependent-types-test:
+  LiPi-test:
     main:                Spec.hs
     source-dirs:         test
     ghc-options:

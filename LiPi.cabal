@@ -37,7 +37,7 @@ library
     , containers
   default-language: Haskell2010
 
-executable dependent-types-exe
+executable LiPi
   main-is: Main.hs
   other-modules:
       Paths_LiPi
@@ -50,7 +50,7 @@ executable dependent-types-exe
     , containers
   default-language: Haskell2010
 
-test-suite dependent-types-test
+test-suite LiPi-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
