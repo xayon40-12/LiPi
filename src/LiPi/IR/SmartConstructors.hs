@@ -78,9 +78,23 @@ withLambdaRec recName n f = Lambda n (f (RecE recName) (NameE n))
 
 data ExpError e
   = ApplyEValueTypeInputTypeNotSame (Type e) (Type e)
+  | MatchEPairFirstValueTypeFirstInputTypeNotSame (Type e) (Type e)
+  | MatchEPairSecondValueTypeSecondInputTypeNotSame (Type e) (Type e)
+  | MatchEPairValuesTypesInputTypesNotSame (Type e) (Type e) (Type e) (Type e)
+  | MatchEChoiceFirstValueTypeFirstInputTypeNotSame (Type e) (Type e)
+  | MatchEChoiceSecondValueTypeSecondInputTypeNotSame (Type e) (Type e)
+  | MatchEChoiceValuesTypesInputTypesNotSame (Type e) (Type e) (Type e) (Type e)
+  | MatchEValueNeitherPairNorChoice (Type e) (Type e)
 
 instance (Show e) => Show (ExpError e) where
   show (ApplyEValueTypeInputTypeNotSame tv tl) = "The input type of the lambda in a ApplyE must be the same as the value, expected (" <> show tv <> "), provided (" <> show tl <> ")."
+  show (MatchEPairFirstValueTypeFirstInputTypeNotSame tp1 tl) = "In a match expression for a pair, The input type of the lambda must be the same as the type of the first value of the pair, expected (" <> show tp1 <> "), provided (" <> show tl <> ")."
+  show (MatchEPairSecondValueTypeSecondInputTypeNotSame tp2 tll) = "In a match expression for a pair, the output of the lambda must be a lambda that takes as input the same type as the second value of the pair, expected (" <> show tp2 <> "), provided (" <> show tll <> ")."
+  show (MatchEPairValuesTypesInputTypesNotSame tp1 tl tp2 tll) = "In a match expression for a pair, The input type of the lambda must be the same as the type of the first value of the pair, expected (" <> show tp1 <> "), provided (" <> show tl <> "), and the output of the lambda must be a lambda that takes as input the same type as the second value of the pair, expected (" <> show tp2 <> "), provided (" <> show tll <> ")."
+  show (MatchEChoiceFirstValueTypeFirstInputTypeNotSame t1 tl1) = "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but the first is not: expected (" <> show t1 <> "), provided (" <> show tl1 <> ")."
+  show (MatchEChoiceSecondValueTypeSecondInputTypeNotSame t2 tl2) = "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but the second is not: expected (" <> show t2 <> "), provided (" <> show tl2 <> ")."
+  show (MatchEChoiceValuesTypesInputTypesNotSame t1 tl1 t2 tl2) = "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but both are not: first expected (" <> show t1 <> ") and provided (" <> show tl1 <> "), second expected (" <> show t2 <> ") and provided (" <> show tl2 <> ")."
+  show (MatchEValueNeitherPairNorChoice t1 t2) = "The values provided to a MatchE must be either a pair or a choice and respectively a lambda or a pair of lambda, provided (" <> show t1 <> ") and (" <> show t2 <> ")."
 
 applyE :: (Show e, Eq e) => Lambda e -> Value e -> Either (ExpError e) (Exp e)
 applyE l@(Lambda (Name _ tl) _) v@(Value _ tv _) =
@@ -88,28 +102,30 @@ applyE l@(Lambda (Name _ tl) _) v@(Value _ tv _) =
     then Right $ ApplyE l v
     else Left $ ApplyEValueTypeInputTypeNotSame tv tl
 
-matchE :: (Show e, Eq e) => Value e -> Value e -> Either Error (Exp e)
+matchE :: (Show e, Eq e) => Value e -> Value e -> Either (ExpError e) (Exp e)
 matchE v@(Value _ _ (PairE p1@(Value _ tp1 _) p2@(Value _ tp2 _))) l@(Value _ _ (LambdaE (Lambda (Name _ tl) (Value _ tll _)))) = case (tp1 == tl, tp2 == tll) of
   (True, True) -> Right $ MatchE v l
-  (False, True) -> Left $ "In a match expression for a pair, The input type of the lambda must be the same as the type of the first value of the pair, expected (" <> show tp1 <> "), provided (" <> show tl <> ")."
-  (True, False) -> Left $ "In a match expression for a pair, the output of the lambda must be a lambda that takes as input the same type as the second value of the pair, expected (" <> show tp2 <> "), provided (" <> show tll <> ")."
-  (False, False) -> Left $ "In a match expression for a pair, The input type of the lambda must be the same as the type of the first value of the pair, expected (" <> show tp1 <> "), provided (" <> show tl <> "), and the output of the lambda must be a lambda that takes as input the same type as the second value of the pair, expected (" <> show tp2 <> "), provided (" <> show tll <> ")."
+  (False, True) -> Left $ MatchEPairFirstValueTypeFirstInputTypeNotSame tp1 tl
+  (True, False) -> Left $ MatchEPairSecondValueTypeSecondInputTypeNotSame tp2 tll
+  (False, False) -> Left $ MatchEPairValuesTypesInputTypesNotSame tp1 tl tp2 tll
 matchE v1@(Value _ (ChoiceT t1 t2) _) v2@(Value _ _ (PairE (Value _ _ (LambdaE (Lambda (Name _ tl1) _))) (Value _ _ (LambdaE (Lambda (Name _ tl2) _))))) = case (t1 == tl1, t2 == tl2) of
   (True, True) -> Right $ MatchE v1 v2
-  (False, True) -> Left $ "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but the first is not: expected (" <> show t1 <> "), provided (" <> show tl1 <> ")."
-  (True, False) -> Left $ "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but the second is not: expected (" <> show t2 <> "), provided (" <> show tl2 <> ")."
-  (False, False) -> Left $ "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but both are not: first expected (" <> show t1 <> ") and provided (" <> show tl1 <> "), second expected (" <> show t2 <> ") and provided (" <> show tl2 <> ")."
-matchE (Value _ t1 _) (Value _ t2 _) = Left $ "The values provided to a MatchE must be either a pair or a choice and respectively a lambda or a pair of lambda, provided (" <> show t1 <> ") and (" <> show t2 <> ")."
+  (False, True) -> Left $ MatchEChoiceFirstValueTypeFirstInputTypeNotSame t1 tl1
+  (True, False) -> Left $ MatchEChoiceSecondValueTypeSecondInputTypeNotSame t2 tl2
+  (False, False) -> Left $ MatchEChoiceValuesTypesInputTypesNotSame t1 tl1 t2 tl2
+matchE (Value _ t1 _) (Value _ t2 _) = Left $ MatchEValueNeitherPairNorChoice t1 t2
+
+data TypeCheckError e
+  = TypeNotType (Type e)
+  | TypeENotTypeT (Type e)
+
+instance (Show e) => Show (TypeCheckError e) where
+  show (TypeNotType t) = "The type (" <> show t <> ") is not actually a type."
+  show (TypeENotTypeT t) = "Type check error: found a TypeE expression of type TypeT where a type (" <> show t <> ") was expected."
 
 unless :: Bool -> Error -> Maybe Error
 unless True _ = Nothing
 unless False err = Just err
-
-data TypeCheckError e
-  = TypeENotTypeT (Type e)
-
-instance (Show e) => Show (TypeCheckError e) where
-  show (TypeENotTypeT t) = "Type check error: found a TypeE expression of type TypeT where a type (" <> show t <> ") was expected."
 
 -- | Verify that the expression as the given type. If not, an information about the difference is returned.
 typeCheck :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe Error
@@ -118,11 +134,12 @@ typeCheck e t =
     then typeCheck' e t
     else Just $ "The type (" <> show t <> ") is not actually a type."
   where
+    ok = Nothing
     typeCheck' :: (Eq e, Ord e) => Exp e -> Type e -> Maybe Error
-    typeCheck' (TypeE _) TypeT = Nothing
+    typeCheck' (TypeE _) TypeT = ok
     typeCheck' (TypeE _) t = Just "" -- TypeENotTypeT t
     typeCheck' (NameE (Name _ t1)) t2 = unless (t1 == t2) ""
-    typeCheck' UnitE UnitT = Nothing
+    typeCheck' UnitE UnitT = ok
     typeCheck' UnitE _ = Just ""
     typeCheck' (PairE v1 v2) (SigmaT t l) = unless (valueType v1 == t && case apply l v1 of (Value _ TypeT (TypeE t2)) -> valueType v2 == t2; _ -> False) ""
     typeCheck' (PairE _ _) _ = Just ""
