@@ -37,10 +37,10 @@ sigmaT t l@(Lambda (Name e tl) (Value _ tv _)) =
     then Right $ SigmaT t l
     else Left $ SigmaTLambdaReturnTypeNotType tv
 
-piT :: (Show e) => Type e -> Lambda e -> Either (TypeError e) (Type e)
-piT t l@(Lambda (Name e tl) (Value _ tv _)) =
+piT :: (Show e) => Type e -> Lambda e -> Bool -> Either (TypeError e) (Type e)
+piT t l@(Lambda (Name e tl) (Value _ tv _)) linear =
   if isType tv
-    then Right $ SigmaT t l
+    then Right $ PiT t l linear
     else Left $ PiTLambdaReturnTypeNotType tv
 
 choiceT :: (Show e) => Type e -> Type e -> Either (TypeError e) (Type e)
@@ -160,3 +160,13 @@ newValue t e = case typeCheck e t of
 
 valueType :: Value e -> Type e
 valueType (Value _ t _) = t
+
+data DefinitionError e = DefinitionValueNotNormal e (Value e)
+
+instance Show e => Show (DefinitionError e) where
+  show (DefinitionValueNotNormal name v) = "In the definition of \"" <> show name <> ", the value (" <> show v <> ") is not in normal form. Only top level values can be definitions."
+
+-- | Create a definition from a name and a Value
+newDefinition :: (Show e) => e -> Value e -> Either (DefinitionError e) (Definition e)
+newDefinition name (Value Normal t e) = Right $ Definition name t e
+newDefinition name v = Left $ DefinitionValueNotNormal name v
