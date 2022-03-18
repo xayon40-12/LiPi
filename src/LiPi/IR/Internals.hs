@@ -97,6 +97,15 @@ instance (Ord e) => Monoid (Status e) where
 -- | A value is an expression with a type and a status
 data Value e = Value (Status e) (Type e) (Exp e) deriving (Eq, Ord, Show)
 
+-- | A definition is a 'Normal' top level binding
+data Definition e
+  = Definition
+      e
+      -- ^ name of the definition
+      (Type e)
+      (Exp e)
+  deriving (Eq, Ord, Show)
+
 -- | Type class to replace names bounded by lambda by the value provided. Needed for lambda application.
 class HasReplace r where
   replace :: (Eq e, Ord e) => (e, Exp e) -> r e -> r e
