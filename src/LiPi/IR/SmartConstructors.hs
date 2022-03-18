@@ -4,14 +4,22 @@ import LiPi.IR.Internals
 
 data TypeError e
   = SigmaTLambdaReturnTypeNotType (Type e)
+  | SigmaTLambdaInputTypeNotSame (Type e) (Type e)
+  | SigmaTLambdaInputTypeNotSameReturnTypeNotType (Type e) (Type e) (Type e)
   | PiTLambdaReturnTypeNotType (Type e)
+  | PiTLambdaInputTypeNotSame (Type e) (Type e)
+  | PiTLambdaInputTypeNotSameReturnTypeNotType (Type e) (Type e) (Type e)
   | ChoiceTFirstTypeNotType (Type e)
   | ChoiceTSecondTypeNotType (Type e)
   | ChoiceTBothTypesNotTypes (Type e) (Type e)
 
 instance (Show e) => Show (TypeError e) where
   show (SigmaTLambdaReturnTypeNotType t) = "The return type of the lambda in a SigmaT must be a valid Type, found: (" <> show t <> ")."
+  show (SigmaTLambdaInputTypeNotSame t tl) = "The input type of the lambda in a SigmaT must be the same type a the first type of this SigmaT, expected: (" <> show t <> "), provided (" <> show tl <> ")."
+  show (SigmaTLambdaInputTypeNotSameReturnTypeNotType t tl tv) = "The input type of the lambda in a SigmaT must be the same type a the first type of this SigmaT, expected: (" <> show t <> "), provided (" <> show tl <> "). The return type of the lambda in a SigmaT must be a valid Type, found: (" <> show t <> ")."
   show (PiTLambdaReturnTypeNotType t) = "The return type of the lambda in a PiT must be a valid Type, found: (" <> show t <> ")."
+  show (PiTLambdaInputTypeNotSame t tl) = "The input type of the lambda in a PiT must be the same type a the first type of this PiT, expected: (" <> show t <> "), provided (" <> show tl <> ")."
+  show (PiTLambdaInputTypeNotSameReturnTypeNotType t tl tv) = "The input type of the lambda in a PiT must be the same type a the first type of this PiT, expected: (" <> show t <> "), provided (" <> show tl <> "). The return type of the lambda in a PiT must be a valid Type, found: (" <> show t <> ")."
   show (ChoiceTFirstTypeNotType t) = "Both types in a ChoiceT must be valid types but the first is not: (" <> show t <> ")."
   show (ChoiceTSecondTypeNotType t) = "Both types in a ChoiceT must be valid types but the second is not: (" <> show t <> ")."
   show (ChoiceTBothTypesNotTypes t1 t2) = "Both types in a ChoiceT must be valid types but both are not: first (" <> show t1 <> "), second (" <> show t2 <> ")."
@@ -31,17 +39,19 @@ isSigmaT _ = False
 isChoiceT (ChoiceT _ _) = True
 isChoiceT _ = False
 
-sigmaT :: (Show e) => Type e -> Lambda e -> Either (TypeError e) (Type e)
-sigmaT t l@(Lambda (Name e tl) (Value _ tv _)) =
-  if isType tv
-    then Right $ SigmaT t l
-    else Left $ SigmaTLambdaReturnTypeNotType tv
+sigmaT :: (Eq e, Show e) => Type e -> Lambda e -> Either (TypeError e) (Type e)
+sigmaT t l@(Lambda _ tl (Value _ tv _)) = case (t == tl, isType tv) of
+  (True, True) -> Right $ SigmaT t l
+  (False, True) -> Left $ SigmaTLambdaInputTypeNotSame t tl
+  (True, False) -> Left $ SigmaTLambdaReturnTypeNotType tv
+  (False, False) -> Left $ SigmaTLambdaInputTypeNotSameReturnTypeNotType t tl tv
 
-piT :: (Show e) => Type e -> Lambda e -> Bool -> Either (TypeError e) (Type e)
-piT t l@(Lambda (Name e tl) (Value _ tv _)) linear =
-  if isType tv
-    then Right $ PiT t l linear
-    else Left $ PiTLambdaReturnTypeNotType tv
+piT :: (Eq e, Show e) => Type e -> Lambda e -> Bool -> Either (TypeError e) (Type e)
+piT t l@(Lambda _ tl (Value _ tv _)) linear = case (t == tl, isType tv) of
+  (True, True) -> Right $ PiT t l linear
+  (False, True) -> Left $ PiTLambdaInputTypeNotSame t tl
+  (True, False) -> Left $ PiTLambdaReturnTypeNotType tv
+  (False, False) -> Left $ PiTLambdaInputTypeNotSameReturnTypeNotType t tl tv
 
 choiceT :: (Show e) => Type e -> Type e -> Either (TypeError e) (Type e)
 choiceT t1 t2 = case (isType t1, isType t2) of
@@ -54,15 +64,19 @@ isType :: Type e -> Bool
 isType TypeT = False -- The type of types is not an element of itself
 isType VoidT = True
 isType UnitT = True
-isType (SigmaT t1 (Lambda (Name _ _) (Value _ t2 _))) = isType t1 && isType t2
-isType (PiT t1 (Lambda (Name _ _) (Value _ t2 _)) _) = isType t1 && isType t2
+isType (SigmaT t1 (Lambda _ _ (Value _ t2 _))) = isType t1 && isType t2
+isType (PiT t1 (Lambda _ _ (Value _ t2 _)) _) = isType t1 && isType t2
 isType (ChoiceT t1 t2) = isType t1 && isType t2
 isType (TaggedT _ t) = isType t
 isType (InductiveT _) = True
 
 -- | Lambda smart constructor that take a name and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
 withLambda :: (Eq e, Ord e) => Name e -> (Exp e -> Value e) -> Lambda e
-withLambda n f = Lambda n (f (NameE n))
+withLambda n@(Name name t) f = Lambda (Just name) t (f (NameE n))
+
+-- | Lambo smart constructor for lambdas that do not depend on their parameter (the input type is still needed)
+constantLambda :: Type e -> Value e -> Lambda e
+constantLambda = Lambda Nothing
 
 -- | Lambda smart constructor with recursion.
 withLambdaRec ::
@@ -74,7 +88,7 @@ withLambdaRec ::
   -- | callback that provide a lambda to create a 'RecE' with the name already provided and the parameter as an expression, that should return the return value of the lambda
   ((Value e -> Value e -> Exp e) -> Exp e -> Value e) ->
   Lambda e
-withLambdaRec recName n f = Lambda n (f (RecE recName) (NameE n))
+withLambdaRec recName n@(Name name t) f = Lambda (Just name) t (f (RecE recName) (NameE n))
 
 data ExpError e
   = ApplyEValueTypeInputTypeNotSame (Type e) (Type e)
@@ -97,18 +111,19 @@ instance (Show e) => Show (ExpError e) where
   show (MatchEValueNeitherPairNorChoice t1 t2) = "The values provided to a MatchE must be either a pair or a choice and respectively a lambda or a pair of lambda, provided (" <> show t1 <> ") and (" <> show t2 <> ")."
 
 applyE :: (Show e, Eq e) => Lambda e -> Value e -> Either (ExpError e) (Exp e)
-applyE l@(Lambda (Name _ tl) _) v@(Value _ tv _) =
+applyE l@(Lambda Nothing _ _) v = Right $ ApplyE l v
+applyE l@(Lambda _ tl _) v@(Value _ tv _) =
   if tv == tl
     then Right $ ApplyE l v
     else Left $ ApplyEValueTypeInputTypeNotSame tv tl
 
 matchE :: (Show e, Eq e) => Value e -> Value e -> Either (ExpError e) (Exp e)
-matchE v@(Value _ _ (PairE p1@(Value _ tp1 _) p2@(Value _ tp2 _))) l@(Value _ _ (LambdaE (Lambda (Name _ tl) (Value _ tll _)))) = case (tp1 == tl, tp2 == tll) of
+matchE v@(Value _ _ (PairE p1@(Value _ tp1 _) p2@(Value _ tp2 _))) l@(Value _ _ (LambdaE (Lambda _ tl (Value _ tll _)))) = case (tp1 == tl, tp2 == tll) of
   (True, True) -> Right $ MatchE v l
   (False, True) -> Left $ MatchEPairFirstValueTypeFirstInputTypeNotSame tp1 tl
   (True, False) -> Left $ MatchEPairSecondValueTypeSecondInputTypeNotSame tp2 tll
   (False, False) -> Left $ MatchEPairValuesTypesInputTypesNotSame tp1 tl tp2 tll
-matchE v1@(Value _ (ChoiceT t1 t2) _) v2@(Value _ _ (PairE (Value _ _ (LambdaE (Lambda (Name _ tl1) _))) (Value _ _ (LambdaE (Lambda (Name _ tl2) _))))) = case (t1 == tl1, t2 == tl2) of
+matchE v1@(Value _ (ChoiceT t1 t2) _) v2@(Value _ _ (PairE (Value _ _ (LambdaE (Lambda _ tl1 _))) (Value _ _ (LambdaE (Lambda _ tl2 _))))) = case (t1 == tl1, t2 == tl2) of
   (True, True) -> Right $ MatchE v1 v2
   (False, True) -> Left $ MatchEChoiceFirstValueTypeFirstInputTypeNotSame t1 tl1
   (True, False) -> Left $ MatchEChoiceSecondValueTypeSecondInputTypeNotSame t2 tl2
@@ -143,8 +158,8 @@ typeCheck e t =
     typeCheck' UnitE _ = Just ""
     typeCheck' (PairE v1 v2) (SigmaT t l) = unless (valueType v1 == t && case apply l v1 of (Value _ TypeT (TypeE t2)) -> valueType v2 == t2; _ -> False) ""
     typeCheck' (PairE _ _) _ = Just ""
-    typeCheck' (LambdaE l) _ = undefined -- TODO: forbid nested name shadowing
-    typeCheck' (ApplyE l v) _ = undefined
+    typeCheck' (LambdaE l) _ = undefined -- TODO: Forbid nested name shadowing
+    typeCheck' (ApplyE l v) _ = undefined -- TODO If the value 'l' is linear, the lambda must have a binding name
     typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) ""
     typeCheck' (InlE (Value _ t _)) _ = Just ""
     typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) ""

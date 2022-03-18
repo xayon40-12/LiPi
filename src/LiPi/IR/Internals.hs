@@ -27,15 +27,18 @@ data Type e
 data Lambda e
   = -- | Lambda expression
     Lambda
-      (Name e)
-      -- ^ typed parameter
+      (Maybe e)
+      -- ^ parameter name
+      (Type e)
+      -- ^ parameter type
       (Value e)
       -- ^ expression of the lambda
   deriving (Eq, Ord, Show)
 
 -- | lambda application
 apply :: (Eq e, Ord e) => Lambda e -> Value e -> Value e
-apply (Lambda (Name p _) r) (Value _ _ v) = replace (p, v) r
+apply (Lambda (Just p) _ r) (Value _ _ v) = replace (p, v) r
+apply (Lambda Nothing _ r) _ = r
 
 -- | Literal name refering to a top level binder (name a of lambda parameter)
 data Name e = Name e (Type e) deriving (Eq, Ord, Show)
@@ -114,7 +117,7 @@ instance HasReplace Value where
   replace re (Value s t e) = let ne = replace re e in Value (status ne) t ne
 
 instance HasReplace Lambda where
-  replace re (Lambda n v) = Lambda n (replace re v)
+  replace re (Lambda n t v) = Lambda n t (replace re v)
 
 instance HasReplace Type where
   replace _ TypeT = TypeT
@@ -146,9 +149,9 @@ instance HasStatus Value where
   status (Value s _ _) = s
 
 instance HasStatus Lambda where
-  status (Lambda n v) = case status v of
-    Neutral ns -> let nns = delete n ns in if null nns then Normal else Neutral nns
-    NeutralR ns -> let nns = delete n ns in if null nns then Reductible else NeutralR nns
+  status (Lambda n t v) = case status v of
+    Neutral ns -> let nns = maybe ns (\i -> delete (Name i t) ns) n in if null nns then Normal else Neutral nns
+    NeutralR ns -> let nns = maybe ns (\i -> delete (Name i t) ns) n in if null nns then Reductible else NeutralR nns
     unbounded -> unbounded
 
 instance HasStatus Type where
