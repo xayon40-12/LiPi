@@ -34,14 +34,14 @@ withInductiveType ::
 withInductiveType n f = TaggedT n (f (NameE (Name n (InductiveT n))))
 
 isSigmaT, isChoiceT :: Type e -> Bool
-isSigmaT (SigmaT _ _) = True
+isSigmaT (SigmaT _ _ _) = True
 isSigmaT _ = False
 isChoiceT (ChoiceT _ _) = True
 isChoiceT _ = False
 
-sigmaT :: (Eq e, Show e) => Type e -> Lambda e -> Either (TypeError e) (Type e)
-sigmaT t l@(Lambda _ tl (Value _ tv _)) = case (t == tl, isType tv) of
-  (True, True) -> Right $ SigmaT t l
+sigmaT :: (Eq e, Show e) => Type e -> Lambda e -> Bool -> Either (TypeError e) (Type e)
+sigmaT t l@(Lambda _ tl (Value _ tv _)) lin = case (t == tl, isType tv) of
+  (True, True) -> Right $ SigmaT t l lin
   (False, True) -> Left $ SigmaTLambdaInputTypeNotSame t tl
   (True, False) -> Left $ SigmaTLambdaReturnTypeNotType tv
   (False, False) -> Left $ SigmaTLambdaInputTypeNotSameReturnTypeNotType t tl tv
@@ -64,7 +64,7 @@ isType :: Type e -> Bool
 isType TypeT = False -- The type of types is not an element of itself
 isType VoidT = True
 isType UnitT = True
-isType (SigmaT t1 (Lambda _ _ (Value _ t2 _))) = isType t1 && isType t2
+isType (SigmaT t1 (Lambda _ _ (Value _ t2 _)) _) = isType t1 && isType t2
 isType (PiT t1 (Lambda _ _ (Value _ t2 _)) _) = isType t1 && isType t2
 isType (ChoiceT t1 t2) = isType t1 && isType t2
 isType (TaggedT _ t) = isType t
@@ -133,42 +133,71 @@ matchE (Value _ t1 _) (Value _ t2 _) = Left $ MatchEValueNeitherPairNorChoice t1
 data TypeCheckError e
   = TypeNotType (Type e)
   | TypeENotTypeT (Type e)
+  | NameEWrongType e (Type e) (Type e)
+  | UnitENotUnitT (Type e)
+  | PairEFirstValueTypeFirstSigmaTTypeNotSame (Type e) (Type e)
+  | PairESecondValueTypeOutputSigmaTLambdaNotSame (Type e) (Type e)
+  | PairENotSigmaT (Type e)
+  | InlETypeLeftChoiceTTypeNotSame (Type e) (Type e)
+  | InlENotChoiceT (Type e)
+  | InrETypeRightChoiceTTypeNotSame (Type e) (Type e)
+  | InrENotChoiceT (Type e)
+  | PairELinearNotOne Int (Value e) (Value e)
 
 instance (Show e) => Show (TypeCheckError e) where
   show (TypeNotType t) = "The type (" <> show t <> ") is not actually a type."
-  show (TypeENotTypeT t) = "Type check error: found a TypeE expression of type TypeT where a type (" <> show t <> ") was expected."
+  show (TypeENotTypeT t) = "Type check error: found a TypeE expression of type TypeT where a value of type (" <> show t <> ") was expected."
 
-unless :: Bool -> Error -> Maybe Error
+unless :: Bool -> TypeCheckError e -> Maybe (TypeCheckError e)
 unless True _ = Nothing
 unless False err = Just err
 
 -- | Verify that the expression as the given type. If not, an information about the difference is returned.
-typeCheck :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe Error
+typeCheck :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe (TypeCheckError e)
 typeCheck e t =
   if isType t
     then typeCheck' e t
-    else Just $ "The type (" <> show t <> ") is not actually a type."
+    else Just $ TypeENotTypeT t
   where
     ok = Nothing
-    typeCheck' :: (Eq e, Ord e) => Exp e -> Type e -> Maybe Error
+    typeCheck' :: (Eq e, Ord e) => Exp e -> Type e -> Maybe (TypeCheckError e)
     typeCheck' (TypeE _) TypeT = ok
-    typeCheck' (TypeE _) t = Just "" -- TypeENotTypeT t
-    typeCheck' (NameE (Name _ t1)) t2 = unless (t1 == t2) ""
+    typeCheck' (TypeE _) t = Just $ TypeENotTypeT t
+    typeCheck' (NameE (Name n t1)) t2 = unless (t1 == t2) (NameEWrongType n t1 t2)
     typeCheck' UnitE UnitT = ok
-    typeCheck' UnitE _ = Just ""
-    typeCheck' (PairE v1 v2) (SigmaT t l) = unless (valueType v1 == t && case apply l v1 of (Value _ TypeT (TypeE t2)) -> valueType v2 == t2; _ -> False) ""
-    typeCheck' (PairE _ _) _ = Just ""
-    typeCheck' (LambdaE l) _ = undefined -- TODO: Forbid nested name shadowing
-    typeCheck' (ApplyE l v) _ = undefined -- TODO If the value 'l' is linear, the lambda must have a binding name
-    typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) ""
-    typeCheck' (InlE (Value _ t _)) _ = Just ""
-    typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) ""
-    typeCheck' (InrE (Value _ t _)) _ = Just ""
-    typeCheck' (MatchE v l) _ = undefined
-    typeCheck' (RecE n v l) _ = undefined
+    typeCheck' UnitE t = Just (UnitENotUnitT t)
+    typeCheck' (PairE v1 v2) (SigmaT t l lin) =
+      if tv1 == t
+        then case apply l v1 of
+          (Value _ TypeT (TypeE t2)) ->
+            if tv2 == t2
+              then
+                let occ = occurences v1 v2
+                 in if lin && occ /= 1
+                      then Just $ PairELinearNotOne occ v1 v2
+                      else ok
+              else Just $ PairESecondValueTypeOutputSigmaTLambdaNotSame tv2 t2
+          _ -> error "This is a bug, the lambda of a SigmaT returned a non Type value during typeCheck."
+        else Just $ PairEFirstValueTypeFirstSigmaTTypeNotSame tv1 t
+      where
+        tv2 = valueType v2
+        tv1 = valueType v1
+    typeCheck' (PairE _ _) t = Just $ PairENotSigmaT t
+    typeCheck' (LambdaE l) t = undefined -- TODO: Forbid nested name shadowing
+    typeCheck' (ApplyE l v) t = undefined -- TODO If the value 'l' is linear, the lambda must have a binding name
+    typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) $ InlETypeLeftChoiceTTypeNotSame t tl
+    typeCheck' (InlE _) t = Just $ InlENotChoiceT t
+    typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) $ InrETypeRightChoiceTTypeNotSame t tr
+    typeCheck' (InrE _) t = Just $ InrENotChoiceT t
+    typeCheck' (MatchE v l) t = undefined
+    typeCheck' (RecE n v l) t = undefined
+
+-- | Count occurences of first value in second value
+occurences :: Value e -> Value e -> Int
+occurences = error "not implemented"
 
 -- | Create a value from a type and an expression if it typechecks
-newValue :: (Eq e, Ord e, Show e) => Type e -> Exp e -> Either Error (Value e)
+newValue :: (Eq e, Ord e, Show e) => Type e -> Exp e -> Either (TypeCheckError e) (Value e)
 newValue t e = case typeCheck e t of
   Nothing -> Right $ Value (status e) t e
   Just err -> Left err

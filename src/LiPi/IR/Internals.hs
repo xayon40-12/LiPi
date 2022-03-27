@@ -11,9 +11,9 @@ data Type e
     VoidT
   | -- | Unit type
     UnitT
-  | -- | Dependent pair, represented as a type and a lambda that take the value of the type and return another type
-    SigmaT (Type e) (Lambda e)
-  | -- | Dependent function, same representation as SigmaT. The boolean represent the linearity of the function
+  | -- | Dependent pair, represented as a type and a lambda that take the value of the type and return another type. The boolean represent the linearity
+    SigmaT (Type e) (Lambda e) Bool
+  | -- | Dependent function, same representation as SigmaT.
     PiT (Type e) (Lambda e) Bool
   | -- | Sum type
     ChoiceT (Type e) (Type e)
@@ -123,7 +123,7 @@ instance HasReplace Type where
   replace _ TypeT = TypeT
   replace _ VoidT = VoidT
   replace _ UnitT = UnitT
-  replace re (SigmaT t l) = SigmaT (replace re t) (replace re l)
+  replace re (SigmaT t l lin) = SigmaT (replace re t) (replace re l) lin
   replace re (PiT t l lin) = PiT (replace re t) (replace re l) lin
   replace re (ChoiceT t1 t2) = ChoiceT (replace re t1) (replace re t2)
   replace re (TaggedT n t) = TaggedT n (replace re t)
@@ -158,7 +158,7 @@ instance HasStatus Type where
   status TypeT = mempty
   status VoidT = mempty
   status UnitT = mempty
-  status (SigmaT t l) = status t <> status l
+  status (SigmaT t l _) = status t <> status l
   status (PiT t l _) = status t <> status l
   status (ChoiceT t1 t2) = status t1 <> status t2
   status (TaggedT _ t) = status t
