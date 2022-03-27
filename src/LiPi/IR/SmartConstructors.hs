@@ -1,5 +1,6 @@
 module LiPi.IR.SmartConstructors where
 
+import Data.Set (size)
 import LiPi.IR.Internals
 
 data TypeError e
@@ -31,24 +32,24 @@ withInductiveType ::
   -- | callback that provide the inductive type as an expression and should return the resulting type
   (Exp e -> Type e) ->
   Type e
-withInductiveType n f = TaggedT n (f (NameE (Name n (InductiveT n))))
+withInductiveType n f = TaggedT n (f (NameE (Name n (InductiveT n) False)))
 
 isSigmaT, isChoiceT :: Type e -> Bool
-isSigmaT (SigmaT _ _ _) = True
+isSigmaT SigmaT {} = True
 isSigmaT _ = False
 isChoiceT (ChoiceT _ _) = True
 isChoiceT _ = False
 
 sigmaT :: (Eq e, Show e) => Type e -> Lambda e -> Bool -> Either (TypeError e) (Type e)
-sigmaT t l@(Lambda _ tl (Value _ tv _)) lin = case (t == tl, isType tv) of
+sigmaT t l@(Lambda _ tl (Value _ tv _) _) lin = case (t == tl, isType tv) of
   (True, True) -> Right $ SigmaT t l lin
   (False, True) -> Left $ SigmaTLambdaInputTypeNotSame t tl
   (True, False) -> Left $ SigmaTLambdaReturnTypeNotType tv
   (False, False) -> Left $ SigmaTLambdaInputTypeNotSameReturnTypeNotType t tl tv
 
 piT :: (Eq e, Show e) => Type e -> Lambda e -> Bool -> Either (TypeError e) (Type e)
-piT t l@(Lambda _ tl (Value _ tv _)) linear = case (t == tl, isType tv) of
-  (True, True) -> Right $ PiT t l linear
+piT t l@(Lambda _ tl (Value _ tv _) _) lin = case (t == tl, isType tv) of
+  (True, True) -> Right $ PiT t l lin
   (False, True) -> Left $ PiTLambdaInputTypeNotSame t tl
   (True, False) -> Left $ PiTLambdaReturnTypeNotType tv
   (False, False) -> Left $ PiTLambdaInputTypeNotSameReturnTypeNotType t tl tv
@@ -64,40 +65,51 @@ isType :: Type e -> Bool
 isType TypeT = False -- The type of types is not an element of itself
 isType VoidT = True
 isType UnitT = True
-isType (SigmaT t1 (Lambda _ _ (Value _ t2 _)) _) = isType t1 && isType t2
-isType (PiT t1 (Lambda _ _ (Value _ t2 _)) _) = isType t1 && isType t2
+isType (SigmaT t1 (Lambda _ _ (Value _ t2 _) _) _) = isType t1 && isType t2
+isType (PiT t1 (Lambda _ _ (Value _ t2 _) _) _) = isType t1 && isType t2
 isType (ChoiceT t1 t2) = isType t1 && isType t2
 isType (TaggedT _ t) = isType t
 isType (InductiveT _) = True
 
 -- | Lambda smart constructor that take a name and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
 withLambda :: (Eq e, Ord e) => Name e -> (Exp e -> Value e) -> Lambda e
-withLambda n@(Name name t) f = Lambda (Just name) t (f (NameE n))
+withLambda n@(Name name t lin) f = Lambda (Just name) t (f (NameE n)) lin -- WARNING check occurences of n in f depending on lin
+
+-- | Pair constructor when the first value is not bounded
+newPair :: Value e -> Value e -> Exp e
+newPair v1 v2 = PairE Nothing v1 v2 False
+
+-- | Pair smart constructor that take a name, its linearity and its corresponding first value, and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
+withPair :: (Eq e, Ord e) => e -> Bool -> Value e -> (Exp e -> Value e) -> Exp e
+withPair n lin v@(Value _ t _) f = PairE (Just n) v (f (NameE (Name n t lin))) lin -- WARNING check occurences of n in f depending on lin
 
 -- | Lambo smart constructor for lambdas that do not depend on their parameter (the input type is still needed)
 constantLambda :: Type e -> Value e -> Lambda e
-constantLambda = Lambda Nothing
+constantLambda t v = Lambda Nothing t v False
 
 -- | Lambda smart constructor with recursion.
 withLambdaRec ::
   (Eq e, Ord e) =>
   -- | Name of the function to recurse on
-  Name e ->
+  e ->
   -- | Name of the lambda parameter
   Name e ->
   -- | callback that provide a lambda to create a 'RecE' with the name already provided and the parameter as an expression, that should return the return value of the lambda
   ((Value e -> Value e -> Exp e) -> Exp e -> Value e) ->
   Lambda e
-withLambdaRec recName n@(Name name t) f = Lambda (Just name) t (f (RecE recName) (NameE n))
+withLambdaRec recName n@(Name name t lin) f = Lambda (Just name) t (f (RecE recName) (NameE n)) lin -- WARNING check occurences of n in f depending on lin
 
 data ExpError e
   = ApplyEValueTypeInputTypeNotSame (Type e) (Type e)
   | MatchEPairFirstValueTypeFirstInputTypeNotSame (Type e) (Type e)
   | MatchEPairSecondValueTypeSecondInputTypeNotSame (Type e) (Type e)
   | MatchEPairValuesTypesInputTypesNotSame (Type e) (Type e) (Type e) (Type e)
+  | MatchEPairENotLambdaInLambda (Value e)
   | MatchEChoiceFirstValueTypeFirstInputTypeNotSame (Type e) (Type e)
   | MatchEChoiceSecondValueTypeSecondInputTypeNotSame (Type e) (Type e)
   | MatchEChoiceValuesTypesInputTypesNotSame (Type e) (Type e) (Type e) (Type e)
+  | MatchEChoiceOutputTypesNotSame (Type e) (Type e)
+  | MatchEChoicePairENotTwoLambdas (Value e)
   | MatchEValueNeitherPairNorChoice (Type e) (Type e)
 
 instance (Show e) => Show (ExpError e) where
@@ -108,26 +120,34 @@ instance (Show e) => Show (ExpError e) where
   show (MatchEChoiceFirstValueTypeFirstInputTypeNotSame t1 tl1) = "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but the first is not: expected (" <> show t1 <> "), provided (" <> show tl1 <> ")."
   show (MatchEChoiceSecondValueTypeSecondInputTypeNotSame t2 tl2) = "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but the second is not: expected (" <> show t2 <> "), provided (" <> show tl2 <> ")."
   show (MatchEChoiceValuesTypesInputTypesNotSame t1 tl1 t2 tl2) = "In a match expression for a choice, Both types of the ChoiceT must be the same as types taken by the lambda to extract it, but both are not: first expected (" <> show t1 <> ") and provided (" <> show tl1 <> "), second expected (" <> show t2 <> ") and provided (" <> show tl2 <> ")."
+  show (MatchEChoiceOutputTypesNotSame t1 t2) = "The output types of the two lambdas in a match for a ChoiceT must be the same, provided (" <> show t1 <> ") and (" <> show t2 <> ")."
   show (MatchEValueNeitherPairNorChoice t1 t2) = "The values provided to a MatchE must be either a pair or a choice and respectively a lambda or a pair of lambda, provided (" <> show t1 <> ") and (" <> show t2 <> ")."
 
+-- WARNING it should check if the value is linear (or contains itself linear values), if so the lambda should be linear accordingly
 applyE :: (Show e, Eq e) => Lambda e -> Value e -> Either (ExpError e) (Exp e)
-applyE l@(Lambda Nothing _ _) v = Right $ ApplyE l v
-applyE l@(Lambda _ tl _) v@(Value _ tv _) =
+applyE l@(Lambda Nothing _ _ lin) v = Right $ ApplyE l v -- WARNING check that lin correspond to linearity of v
+applyE l@(Lambda _ tl _ lin) v@(Value _ tv _) =
   if tv == tl
-    then Right $ ApplyE l v
+    then Right $ ApplyE l v -- WARNING check that lin correspond to linearity of v
     else Left $ ApplyEValueTypeInputTypeNotSame tv tl
 
+-- WARNING it should check if the value is linear (or contains itself linear values), if so the lambda should be linear accordingly
 matchE :: (Show e, Eq e) => Value e -> Value e -> Either (ExpError e) (Exp e)
-matchE v@(Value _ _ (PairE p1@(Value _ tp1 _) p2@(Value _ tp2 _))) l@(Value _ _ (LambdaE (Lambda _ tl (Value _ tll _)))) = case (tp1 == tl, tp2 == tll) of
+matchE v@(Value _ _ (PairE _ p1@(Value _ tp1 _) p2@(Value _ tp2 _) plin)) l@(Value _ _ (LambdaE (Lambda _ tl (Value _ _ (LambdaE (Lambda _ tll _ lllin))) llin))) = case (tp1 == tl, tp2 == tll) of
   (True, True) -> Right $ MatchE v l
   (False, True) -> Left $ MatchEPairFirstValueTypeFirstInputTypeNotSame tp1 tl
   (True, False) -> Left $ MatchEPairSecondValueTypeSecondInputTypeNotSame tp2 tll
   (False, False) -> Left $ MatchEPairValuesTypesInputTypesNotSame tp1 tl tp2 tll
-matchE v1@(Value _ (ChoiceT t1 t2) _) v2@(Value _ _ (PairE (Value _ _ (LambdaE (Lambda _ tl1 _))) (Value _ _ (LambdaE (Lambda _ tl2 _))))) = case (t1 == tl1, t2 == tl2) of
-  (True, True) -> Right $ MatchE v1 v2
+matchE (Value _ _ PairE {}) v = Left $ MatchEPairENotLambdaInLambda v
+matchE v1@(Value _ (ChoiceT t1 t2) _) v2@(Value _ _ (PairE _ (Value _ _ (LambdaE (Lambda _ tl1 (Value _ tv1 _) l1lin))) (Value _ _ (LambdaE (Lambda _ tl2 (Value _ tv2 _) l2lin))) plin)) = case (t1 == tl1, t2 == tl2) of
+  (True, True) ->
+    if tv1 == tv2
+      then Right $ MatchE v1 v2
+      else Left $ MatchEChoiceOutputTypesNotSame tv1 tv2
   (False, True) -> Left $ MatchEChoiceFirstValueTypeFirstInputTypeNotSame t1 tl1
   (True, False) -> Left $ MatchEChoiceSecondValueTypeSecondInputTypeNotSame t2 tl2
   (False, False) -> Left $ MatchEChoiceValuesTypesInputTypesNotSame t1 tl1 t2 tl2
+matchE (Value _ (ChoiceT t1 t2) _) v = Left $ MatchEChoicePairENotTwoLambdas v
 matchE (Value _ t1 _) (Value _ t2 _) = Left $ MatchEValueNeitherPairNorChoice t1 t2
 
 data TypeCheckError e
@@ -142,7 +162,13 @@ data TypeCheckError e
   | InlENotChoiceT (Type e)
   | InrETypeRightChoiceTTypeNotSame (Type e) (Type e)
   | InrENotChoiceT (Type e)
-  | PairELinearNotOne Int (Value e) (Value e)
+  | PairELinearNoBinding
+  | PairELinearNotOne Int e (Value e)
+  | PairENotSameLinearity Bool Bool
+  | LambdaENotSigmaT (Type e)
+  | ApplyEResultTypeNotSame (Type e) (Type e)
+  | MatchEPairResultTypeNotSame (Type e) (Type e)
+  | MatchEChoiceResultTypeNotSame (Type e) (Type e)
 
 instance (Show e) => Show (TypeCheckError e) where
   show (TypeNotType t) = "The type (" <> show t <> ") is not actually a type."
@@ -160,41 +186,39 @@ typeCheck e t =
     else Just $ TypeENotTypeT t
   where
     ok = Nothing
-    typeCheck' :: (Eq e, Ord e) => Exp e -> Type e -> Maybe (TypeCheckError e)
+    typeCheck' :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe (TypeCheckError e)
     typeCheck' (TypeE _) TypeT = ok
     typeCheck' (TypeE _) t = Just $ TypeENotTypeT t
-    typeCheck' (NameE (Name n t1)) t2 = unless (t1 == t2) (NameEWrongType n t1 t2)
+    typeCheck' (NameE (Name n t1 _)) t2 = unless (t1 == t2) (NameEWrongType n t1 t2)
     typeCheck' UnitE UnitT = ok
     typeCheck' UnitE t = Just (UnitENotUnitT t)
-    typeCheck' (PairE v1 v2) (SigmaT t l lin) =
+    typeCheck' (PairE n v1 v2 plin) (SigmaT t l lin) =
       if tv1 == t
         then case apply l v1 of
           (Value _ TypeT (TypeE t2)) ->
             if tv2 == t2
               then
-                let occ = occurences v1 v2
-                 in if lin && occ /= 1
-                      then Just $ PairELinearNotOne occ v1 v2
-                      else ok
+                if lin /= plin
+                  then Just $ PairENotSameLinearity plin lin
+                  else ok
               else Just $ PairESecondValueTypeOutputSigmaTLambdaNotSame tv2 t2
-          _ -> error "This is a bug, the lambda of a SigmaT returned a non Type value during typeCheck."
+          _ -> error "The unexpected happened, the lambda of a SigmaT returned a non Type value during typeCheck, this is a bug."
         else Just $ PairEFirstValueTypeFirstSigmaTTypeNotSame tv1 t
       where
         tv2 = valueType v2
         tv1 = valueType v1
-    typeCheck' (PairE _ _) t = Just $ PairENotSigmaT t
-    typeCheck' (LambdaE l) t = undefined -- TODO: Forbid nested name shadowing
-    typeCheck' (ApplyE l v) t = undefined -- TODO If the value 'l' is linear, the lambda must have a binding name
+    typeCheck' PairE {} t = Just $ PairENotSigmaT t
+    typeCheck' (LambdaE (Lambda n lt le llin)) (PiT t l lin) = undefined -- TODO: Forbid nested name shadowing
+    typeCheck' (LambdaE _) t = Just $ LambdaENotSigmaT t
+    typeCheck' (ApplyE (Lambda _ _ (Value _ tv _) _) _) t = unless (tv == t) $ ApplyEResultTypeNotSame tv t
     typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) $ InlETypeLeftChoiceTTypeNotSame t tl
     typeCheck' (InlE _) t = Just $ InlENotChoiceT t
     typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) $ InrETypeRightChoiceTTypeNotSame t tr
     typeCheck' (InrE _) t = Just $ InrENotChoiceT t
-    typeCheck' (MatchE v l) t = undefined
+    typeCheck' (MatchE (Value _ SigmaT {} _) (Value _ _ (LambdaE (Lambda _ _ (Value _ _ (LambdaE (Lambda _ _ (Value _ vt _) _))) _)))) t = unless (vt == t) $ MatchEPairResultTypeNotSame vt t
+    typeCheck' (MatchE (Value _ ChoiceT {} _) (Value _ _ (PairE _ (Value _ _ (LambdaE (Lambda _ _ (Value _ tv1 _) _))) _ _))) t = unless (tv1 == t) $ MatchEChoiceResultTypeNotSame tv1 t
+    typeCheck' (MatchE v _) _ = error $ "The unexpected happened, while type checking a match expression, a value which is neither a choice nor a pair was found (" <> show v <> "), this is a bug."
     typeCheck' (RecE n v l) t = undefined
-
--- | Count occurences of first value in second value
-occurences :: Value e -> Value e -> Int
-occurences = error "not implemented"
 
 -- | Create a value from a type and an expression if it typechecks
 newValue :: (Eq e, Ord e, Show e) => Type e -> Exp e -> Either (TypeCheckError e) (Value e)

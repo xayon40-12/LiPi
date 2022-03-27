@@ -13,7 +13,7 @@ ioaction name = PiT vioType cvioType True
   where
     vioType = vio name
     vioValue = Value Normal vioType undefined
-    cvioType = Lambda Nothing vioType vioValue
+    cvioType = Lambda Nothing vioType vioValue True
 
 instance Show e => Show (VIOError e) where
   show (IODefinitionNotVIO2VIO io name t) = "In a definition of an IO action \"" <> show name <> "\": an IO action (as what is unsually called \"main\") must be of type (" <> show (ioaction io) <> "), provided (" <> show t <> ")."
