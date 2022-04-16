@@ -33,7 +33,7 @@ data TypeError e
 
 -- | smart constractor for ValueT, takes an value that should evaluate as a type
 valueT :: Value e -> Error e (Type e)
-valueT v@(Value _ TypeT _) = Success $ ValueT v
+valueT v@(Value _ TypeT _ _) = Success $ ValueT v
 valueT v = TypeError $ ValueTValueNotType v
 
 -- | smart constructor for inductive types.
@@ -41,20 +41,24 @@ withInductiveType ::
   -- | Name of the type
   e ->
   -- | callback that provide the inductive type as an expression and should return the resulting type
-  (Exp e -> Type e) ->
+  (Value e -> Type e) ->
   Type e
-withInductiveType n f = TaggedT n (f (NameE n (InductiveT n) False))
+withInductiveType n f = TaggedT (n, f (neutralName n (InductiveT n) False))
+
+-- | create a value that contains a name with neutral status
+neutralName :: e -> Type e -> Bool -> Value e
+neutralName n t = Value (neutral n) t (NameE n)
 
 -- | SigmaT smart constructor that takes a binding name, the first type, a callback that produces the second type with the binding name, the linearity
-sigmaT :: (Eq e) => e -> Type e -> (Exp e -> Error e (Type e)) -> Bool -> Error e (Type e)
-sigmaT n t1 f lin = case f (NameE n t1 lin) of
-  (Success t2) -> Success $ SigmaT n t1 t2 lin
+sigmaT :: (Eq e) => e -> Type e -> (Value e -> Error e (Type e)) -> Bool -> Error e (Type e)
+sigmaT n t1 f lin = case f (neutralName n t1 lin) of
+  (Success t2) -> Success $ SigmaT (n, t1) t2 lin
   failure -> TypeError $ SigmaTSecondTypeError (() <$ failure)
 
 -- | PiT smart constructor that takes a binding name, the input type, a callback that produces the output type with the binding name, the linearity
-piT :: (Eq e) => e -> Type e -> (Exp e -> Error e (Type e)) -> Bool -> Error e (Type e)
-piT n t1 f lin = case f (NameE n t1 lin) of
-  (Success t2) -> Success $ PiT n t1 t2 lin
+piT :: (Eq e) => e -> Type e -> (Value e -> Error e (Type e)) -> Bool -> Error e (Type e)
+piT n t1 f lin = case f (neutralName n t1 lin) of
+  (Success t2) -> Success $ PiT (n, t1) t2 lin
   failure -> TypeError $ PiTSecondTypeError (() <$ failure)
 
 data ExpError e
@@ -73,6 +77,8 @@ data ExpError e
   | LambdaLinearNotOneOccurence e Int (Value e)
   | LambdaRecNotSigmaTChoiceT e (Type e)
   | PairELinearNotOneOccurence e Int (Value e)
+  | PairENotLinearForLinearValue (Value e)
+  | ApplyELambdaNotLinearForLinearValue (Value e) (Value e)
 
 instance (Show e) => Show (ExpError e) where
   show (ApplyEValueTypeInputTypeNotSame tv tl) = "The input type of the lambda in a ApplyE must be the same as the value, expected (" <> show tv <> "), provided (" <> show tl <> ")."
@@ -86,13 +92,13 @@ instance (Show e) => Show (ExpError e) where
   show (MatchEValueNeitherPairNorChoice t1 t2) = "The values provided to a MatchE must be either a pair or a choice and respectively a lambda or a pair of lambda, provided (" <> show t1 <> ") and (" <> show t2 <> ")."
 
 -- | Lambda smart constructor that takes a name, its type and linearity, and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
-withLambda :: (Eq e) => e -> Type e -> (Exp e -> Error e (Value e)) -> Bool -> Error e (Exp e)
+withLambda :: (Eq e) => e -> Type e -> (Value e -> Error e (Value e)) -> Bool -> Error e (Exp e)
 withLambda n t f lin = do
-  res <- f (NameE n t lin)
+  res <- f (neutralName n t lin)
   let occ = occurences n res
   if occ /= 1
     then ExpError $ LambdaLinearNotOneOccurence n occ res
-    else Success $ LambdaE n t res lin -- WARNING check occurences of n in f depending on lin
+    else Success $ LambdaE (n, t) res lin -- WARNING check occurences of n in f depending on lin
 
 -- | Lambda smart constructor with recursion.
 withLambdaRec ::
@@ -108,35 +114,39 @@ withLambdaRec ::
   -- | Linearity of the lambda
   Bool ->
   -- | callback that provide the name of the lambda itself as on expression and the parameter as an expression, that should return the return value of the lambda
-  (Exp e -> Exp e -> Error e (Value e)) ->
+  (Value e -> Value e -> Error e (Value e)) ->
   Error e (Exp e)
-withLambdaRec recName recType@(SigmaT _ (ChoiceT _ _) sl slin) n t lin f = undefined -- TODO
+withLambdaRec recName recType@(SigmaT (_, ChoiceT _ _) sl slin) n t lin f = undefined -- TODO
+  where
+    recMatchE :: e -> Type e -> Value e -> (e, Value e -> Value e -> Error e (Value e)) -> (e, Value e -> Value e -> Error e (Value e)) -> Error e (Value e)
+    recMatchE nr tr v (a, fara) (b, fbrb) = undefined
 withLambdaRec recName recType _ _ _ _ = ExpError $ LambdaRecNotSigmaTChoiceT recName recType
 
--- | Pair smart constructor that take a name, its linearity and its corresponding first value, and a callback as input. It provide the name as an expression to the callmack to use it to produce the value that the lambda would return by replacing this name with a value during application.
-withPair :: (Eq e) => e -> Bool -> Value e -> (Exp e -> Error e (Value e)) -> Error e (Exp e)
-withPair n lin v@(Value _ t _) f = do
-  res <- f (NameE n t lin)
+-- | Pair smart constructor that take a name, its linearity and its corresponding first value, and a callback as input. It provide the name as an expression to the callback to use it to produce the value that the lambda would return by replacing this name with a value during application.
+withPair :: (Eq e) => e -> Bool -> Value e -> (Value e -> Error e (Value e)) -> Error e (Exp e)
+withPair n l1 v@(Value _ t _ l2) f | l2 && not l1 = ExpError $ PairENotLinearForLinearValue v
+withPair n lin v@(Value _ t _ _) f = do
+  res <- f (neutralName n t lin)
   let occ = occurences n res
   if occ /= 1
     then ExpError $ PairELinearNotOneOccurence n occ res
-    else Success $ PairE n v res lin -- WARNING check occurences of n in f depending on lin
+    else Success $ PairE (n, v) res lin -- WARNING check occurences of n in f depending on lin
 
--- WARNING it should check if the value is linear (or contains itself linear values), if so the lambda should be linear accordingly
 applyE :: (Eq e) => Value e -> Value e -> Error e (Exp e)
-applyE l@(Value _ (SigmaT n t e lin) _) v@(Value _ tv _) =
+applyE l@(Value _ (SigmaT _ _ l1) _ _) v@(Value _ _ _ l2) | l2 && not l1 = ExpError $ ApplyELambdaNotLinearForLinearValue l v
+applyE l@(Value _ (SigmaT (n, t) e lin) _ _) v@(Value _ tv _ _) =
   if t == tv
-    then Success $ ApplyE l v -- WARNING check that lin correspond to linearity of v
+    then Success $ ApplyE l v
     else ExpError $ ApplyEValueTypeInputTypeNotSame tv t
 applyE l _ = ExpError $ ApplyEFirstValueNotSigmaT l
 
 -- WARNING it should check if the value is linear (or contains itself linear values), if so the lambda should be linear accordingly
-matchChoiceE :: Value e -> Value e -> Value e -> Error e (Exp e)
-matchChoiceE = undefined
+matchChoiceE :: Value e -> (e, Value e -> Error e (Value e)) -> (e, Value e -> Error e (Value e)) -> Error e (Exp e)
+matchChoiceE v (a, fa) (b, fb) = undefined
 
 -- WARNING it should check if the value is linear (or contains itself linear values), if so the lambda should be linear accordingly
-matchPairE :: Value e -> Value e -> Error e (Exp e)
-matchPairE = undefined
+matchPairE :: Value e -> (e, e) -> (Value e -> Value e -> Error e (Value e)) -> Error e (Exp e)
+matchPairE v (a, b) fab = undefined
 
 data TypeCheckError e
   = TypeENotTypeT (Type e)
@@ -165,17 +175,17 @@ unless True _ = Nothing
 unless False err = Just err
 
 -- | Verify that the expression as the given type. If not, an information about the difference is returned.
-typeCheck :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe (TypeCheckError e)
-typeCheck e t = typeCheck' e t
+typeCheck :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Bool -> Maybe (TypeCheckError e)
+typeCheck e t l = typeCheck' e t
   where
     ok = Nothing
     typeCheck' :: (Show e, Eq e, Ord e) => Exp e -> Type e -> Maybe (TypeCheckError e)
     typeCheck' (TypeE _) TypeT = ok
     typeCheck' (TypeE _) t = Just $ TypeENotTypeT t
-    typeCheck' (NameE n t1 _) t2 = unless (t1 == t2) (NameEWrongType n t1 t2)
+    typeCheck' (NameE _) _ = error "The impossible happend, during type checking a NameE was provided although it should only be provided directly wrapped in a value from smart constructors, this is a bug."
     typeCheck' UnitE UnitT = ok
     typeCheck' UnitE t = Just (UnitENotUnitT t)
-    typeCheck' (PairE n v1 v2 plin) (SigmaT nt t1 t2 lin) =
+    typeCheck' (PairE (n, v1) v2 plin) (SigmaT (nt, t1) t2 lin) =
       if tv1 == t1
         then undefined
         else Just $ PairEFirstValueTypeFirstSigmaTTypeNotSame tv1 t1
@@ -183,31 +193,35 @@ typeCheck e t = typeCheck' e t
         tv2 = valueType v2
         tv1 = valueType v1
     typeCheck' PairE {} t = Just $ PairENotSigmaT t
-    typeCheck' (LambdaE n lt le llin) (PiT nt t l lin) = undefined -- TODO: Forbid nested name shadowing
+    typeCheck' (LambdaE (n, lt) le llin) (PiT (nt, t) lp lin) = undefined -- TODO: Forbid nested name shadowing
     typeCheck' LambdaE {} t = Just $ LambdaENotSigmaT t
-    typeCheck' (ApplyE (Value _ (SigmaT _ _ o _) _) _) t = undefined -- the o
-    typeCheck' (ApplyE (Value _ t _) _) _ = error $ "The impossible happened, during type checking an ApplyE with a non SigmaT first value was provided (" <> show t <> "), this i a bug."
-    typeCheck' (InlE (Value _ t _)) (ChoiceT tl _) = unless (t == tl) $ InlETypeLeftChoiceTTypeNotSame t tl
+    typeCheck' (ApplyE (Value _ (SigmaT (_, _) o _) _ _) _) t = undefined -- the o
+    typeCheck' (ApplyE (Value _ t _ _) _) _ = error $ "The impossible happened, during type checking an ApplyE with a non SigmaT first value was provided (" <> show t <> "), this i a bug."
+    typeCheck' (InlE (Value _ t _ _)) (ChoiceT tl _) = unless (t == tl) $ InlETypeLeftChoiceTTypeNotSame t tl
     typeCheck' (InlE _) t = Just $ InlENotChoiceT t
-    typeCheck' (InrE (Value _ t _)) (ChoiceT _ tr) = unless (t == tr) $ InrETypeSuccessChoiceTTypeNotSame t tr
+    typeCheck' (InrE (Value _ t _ _)) (ChoiceT _ tr) = unless (t == tr) $ InrETypeSuccessChoiceTTypeNotSame t tr
     typeCheck' (InrE _) t = Just $ InrENotChoiceT t
-    typeCheck' (RecMatchE n rt v l) t = undefined
+    typeCheck' (RecMatchE n rt v lr) t = undefined
 
 -- | Create a value from a type and an expression if it typechecks
-newValue :: (Eq e, Ord e, Show e) => Exp e -> Type e -> Error e (Value e)
-newValue e t = case typeCheck e t of
-  Nothing -> Success $ Value (status e) t e
+newValue :: (Eq e, Ord e, Show e) => Exp e -> Type e -> Bool -> Error e (Value e)
+newValue e t l = case typeCheck e t l of
+  -- WARNING: every constructed expressions that contains linear values must be linear as well
+  Nothing -> Success $ Value (status e) t e l
   Just err -> TypeCheckError err
 
 valueType :: Value e -> Type e
-valueType (Value _ t _) = t
+valueType (Value _ t _ _) = t
 
-data DefinitionError e = DefinitionValueNotNormal e (Value e)
+isLinear :: Value e -> Bool
+isLinear (Value _ _ _ l) = l
+
+data DefinitionError e = DefinitionValueNotNormalNonLinear e (Value e)
 
 instance Show e => Show (DefinitionError e) where
-  show (DefinitionValueNotNormal name v) = "In the definition of \"" <> show name <> ", the value (" <> show v <> ") is not in normal form. Only top level values can be definitions."
+  show (DefinitionValueNotNormalNonLinear name v) = "In the definition of \"" <> show name <> ", the value (" <> show v <> ") should be in normal form and not linear. Only top level values can be definitions."
 
 -- | Create a definition from a name and a Value
 newDefinition :: (Show e) => e -> Value e -> Error e (Definition e)
-newDefinition name (Value Normal t e) = Success $ Definition name t e
-newDefinition name v = DefinitionError $ DefinitionValueNotNormal name v
+newDefinition name (Value Normal t e False) = Success $ Definition name t e
+newDefinition name v = DefinitionError $ DefinitionValueNotNormalNonLinear name v

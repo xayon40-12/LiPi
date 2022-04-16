@@ -20,3 +20,5 @@
  ** IO
     - for IO create an `IO` type with different helper functions that only use `IO` linearly. The type of main is thus `main :: IO -o IO` where `-o` is the linear function operator
     - IO is simply `VoidT` tagged IO so for `String` it is `TaggetT "IO" VoidT`
+    - all provided IO function takes after their parameters the next computation as an `IO -o IO` and return an `IO -o IO`. Thus a non linear `IO` is never returned. And it will looks like imperative order.
+      -- `print : s:String -> f:(IO -o IO) -o io:IO -o IO = ...` then one can print sequentially `print "hello" print "wold" done` where `done:IO -o IO` is the IO action that do nothing to end a program.
