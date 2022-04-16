@@ -117,7 +117,7 @@ instance HasReplace Exp where
   replace (p, e) ne@(NameE n) = if p == n then e else ne
   replace _ UnitE = UnitE
   replace re (PairE (n, v1) v2 lin) = PairE (n, replace re v1) (replace re v2) lin
-  replace re (LambdaE (n, t) v lin) = LambdaE (n, t) (replace re v) lin
+  replace re (LambdaE (n, t) v lin) = LambdaE (n, replace re t) (replace re v) lin
   replace re (ApplyE l n) = ApplyE (replace re l) (replace re n)
   replace re (InlE v) = InlE (replace re v)
   replace re (InrE v) = InrE (replace re v)
