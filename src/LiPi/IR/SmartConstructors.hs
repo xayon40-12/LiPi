@@ -132,6 +132,7 @@ withPair n lin v@(Value _ t _ _) f = do
     then ExpError $ PairELinearNotOneOccurence n occ res
     else Success $ PairE (n, v) res lin -- WARNING check occurences of n in f depending on lin
 
+-- WARNING: the result of the evaluation of an applyE must have the same linearity as the input value. If the property that "every value construted with a linear value is then linear" is respected, then the precendent warning should be automatically fullfiled.
 applyE :: (Eq e) => Value e -> Value e -> Error e (Exp e)
 applyE l@(Value _ (SigmaT _ _ l1) _ _) v@(Value _ _ _ l2) | l2 && not l1 = ExpError $ ApplyELambdaNotLinearForLinearValue l v
 applyE l@(Value _ (SigmaT (n, t) e lin) _ _) v@(Value _ tv _ _) =
